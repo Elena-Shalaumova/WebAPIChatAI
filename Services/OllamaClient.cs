@@ -16,6 +16,9 @@ namespace WebAPIChatAI.Services
             _http = http;
             _http.BaseAddress = new Uri("http://localhost:11434/");
             //_http.BaseAddress = new Uri("http://178.130.131.73:8080/");
+
+            // ВАЖНО: ОТКЛЮЧАЕМ ТАЙМАУТ ПОЛНОСТЬЮ
+            _http.Timeout = Timeout.InfiniteTimeSpan;
         }
 
         /// <summary>
@@ -42,42 +45,7 @@ namespace WebAPIChatAI.Services
             return doc.RootElement.GetProperty("response").GetString() ?? "";
         }
 
-        // ---------------------------------------------------------------------
-        // NEW: универсальный метод для ANY модели по messages[] + поддержка картинок
-        // ---------------------------------------------------------------------
-        /// <summary>
-        /// Универсальный метод отправки чата с контекстом messages[]
-        /// Поддерживает как текстовые сообщения, так и картинки (images: ["base64"]).
-        /// ВСЕ чатовые запросы LLM должны идти через этот метод.
-        /// </summary>
-        //public async Task<string> SendChatAsync(string model, List<object> messages)
-        //{
-        //    var body = new
-        //    {
-        //        model = model,
-        //        messages = messages,
-        //        stream = false
-        //    };
-
-        //    var json = JsonSerializer.Serialize(body);
-        //    var content = new StringContent(json, Encoding.UTF8, "application/json");
-
-        //    var response = await _http.PostAsync("api/chat", content);
-        //    response.EnsureSuccessStatusCode();
-
-        //    var responseJson = await response.Content.ReadAsStringAsync();
-
-        //    using var doc = JsonDocument.Parse(responseJson);
-
-        //    // формат ответа ollama: { "message": { "content": "..." }, ... }
-        //    var contentText =
-        //        doc.RootElement
-        //            .GetProperty("message")
-        //            .GetProperty("content")
-        //            .GetString();
-
-        //    return contentText ?? "";
-        //}
+       
 
         public async Task<string> SendChatAsync(string model, List<object> messages)
         {

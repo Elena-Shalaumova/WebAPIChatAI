@@ -1,4 +1,4 @@
-using Microsoft.EntityFrameworkCore;
+﻿using Microsoft.EntityFrameworkCore;
 using MySqlConnector;
 using WebAPIChatAI.Models;
 using WebAPIChatAI.Services;
@@ -12,7 +12,7 @@ var csb = new MySqlConnectionStringBuilder
 {
     Server = "127.0.0.1",
     Port = 3306,
-    Database = "alabuga_reg_chat",
+    Database = "alabugaaidb",
     UserID = "clientKotlin",
     Password = "12345678",
     SslMode = MySqlSslMode.None,
@@ -25,7 +25,7 @@ var cs = csb.ConnectionString;
 builder.Services.AddDbContext<ChatAIDB>(options =>
 {
     options.UseMySql(cs, ServerVersion.AutoDetect(cs)); // Pomelo
-    options.UseLazyLoadingProxies();                    // ���� ������� �����
+    options.UseLazyLoadingProxies();                    // если реально нужно
 });
 
 
@@ -35,7 +35,14 @@ builder.Services.AddDbContext<ChatAIDB>(options =>
 
 builder.Services.AddControllers();
 
-builder.Services.AddHttpClient<OllamaClient>();
+
+
+builder.Services.AddHttpClient<OllamaClient>(client =>
+{
+    client.BaseAddress = new Uri("http://localhost:11434");  // или http://ollama:11434
+    client.Timeout = Timeout.InfiniteTimeSpan;                // ❗ бесконечное ожидание
+});
+
 
 // Learn more about configuring Swagger/OpenAPI at https://aka.ms/aspnetcore/swashbuckle
 builder.Services.AddEndpointsApiExplorer();

@@ -7,8 +7,8 @@ namespace WebAPIChatAI.Services
         private static readonly HashSet<string> VisionModels =
             new HashSet<string>(System.StringComparer.OrdinalIgnoreCase)
             {
-                "qwen2-vl:2b",
-                "qwen2-vl:2b-instruct-q4_K_M"
+                "qwen3-vl:2b",
+                "qwen3-vl:2b-instruct-q4_K_M"
                 //vision-модели
             };
 

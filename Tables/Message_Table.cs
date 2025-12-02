@@ -14,7 +14,7 @@ namespace WebAPIChatAI.Tables
         public int ChatId { get; set; }
 
         // 0 – assistant (модель), 1 – user
-        [Column("Role")]
+        [Column("role")]
         public int Role { get; set; }
 
         [Column("text")]
@@ -24,15 +24,14 @@ namespace WebAPIChatAI.Tables
         [Column("type")]
         public string Type { get; set; } = "text";
 
-        // картинка в бинарном виде (MEDIUMBLOB)
-        [Column("imageBlob")]
-        public byte[]? ImageBlob { get; set; }
-
         [Column("createdAt")]
         public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
 
         // Навигация к чату
         public virtual Chat_Table Chat { get; set; } = null!;
+
+        // 🔥 Новая навигация: список картинок у сообщения
+        public virtual List<Image_Table> Images { get; set; } = new();
     }
 
 }
