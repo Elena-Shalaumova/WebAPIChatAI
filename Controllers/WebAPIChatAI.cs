@@ -1,7 +1,7 @@
 ﻿using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.AspNetCore.Identity;              // PasswordHasher
-using WebAPIChatAI.Models;                        // RegisterDto, LoginDto
+using WebAPIChatAI.Models;                        // RegisterDto, LoginDto, LastMessageDto
 using WebAPIChatAI.Tables;                        // User_Table
 using System.Net.Http;
 using System.Net.Http.Json;
@@ -182,6 +182,36 @@ namespace WebAPIChatAI.Controllers
             return NoContent();
         }
 
+        // =========================
+        //   LAST MESSAGES BY USER
+        // =========================
+        // GET: api/WebAPIChatAI/user/5/last-messages
+        [HttpGet("user/{userId}/last-messages")]
+        public async Task<IActionResult> GetLastMessagesForUser(int userId)
+        {
+            // Берём все сообщения, у которых чат принадлежит нужному пользователю,
+            // группируем по chatId и берём из каждой группы самое "свежее"
+            var lastMessages = await _context.Messages
+                .Where(m => m.Chat.UserId == userId)
+                .GroupBy(m => m.ChatId)
+                .Select(g => g
+                    .OrderByDescending(m => m.CreatedAt)
+                    .Select(m => new LastMessageDto
+                    {
+                        ChatId = m.ChatId,
+                        MessageId = m.Id,
+                        Text = m.Text,
+                        Role = m.Role,
+                        Type = m.Type,
+                        CreatedAt = m.CreatedAt
+                    })
+                    .FirstOrDefault()
+                )
+                .ToListAsync();
+
+            return Ok(lastMessages);
+        }
+
         // DTO под ответ /api/tags от Ollama
         public class OllamaTagsResponse
         {
@@ -272,9 +302,55 @@ namespace WebAPIChatAI.Controllers
                 createdAt = user.Created_At,
                 modelChanged = _modelChanged,
                 model = _currentModelName
-
             });
-}
+        }
 
     }
 }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

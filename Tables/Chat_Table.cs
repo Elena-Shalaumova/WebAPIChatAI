@@ -9,5 +9,6 @@
 
         public virtual User_Table User { get; set; } = null!;
         public virtual List<Message_Table> Messages { get; set; } = new();
+        public bool IsIncognito { get; set; } = false;
     }
 }

@@ -65,19 +65,38 @@ namespace WebAPIChatAI.Controllers
 
 
         // ---------- ЧАТЫ ----------
-
         /// GET: /api/Chat/user/{userId}/chats
         [HttpGet("user/{userId}/chats")]
         public async Task<ActionResult<IEnumerable<ChatDto>>> GetChats(long userId)
         {
-            var chats = await _context.Chats
-                .Where(c => c.UserId == userId)
-                .OrderByDescending(c => c.Id)
-                .Select(c => new ChatDto(c.Id, c.Title))
-                .ToListAsync();
+            var query =
+                from c in _context.Chats
+                where c.UserId == userId
+                 && !c.IsIncognito
+                join sc in _context.SettingChats
+                    on c.Id equals sc.ChatId into scGroup
 
+                from sc in scGroup
+                    .OrderByDescending(x => x.Id)
+                    .Take(1)
+                    .DefaultIfEmpty()
+
+                orderby c.Id descending
+
+                select new ChatDto(c.Id, c.Title)
+                {
+                    Id = c.Id,
+                    UserId = c.UserId,
+                    Title = c.Title,
+                    Model = sc != null ? sc.Model : null,
+                    IsIncognito = c.IsIncognito
+                };
+
+            var chats = await query.ToListAsync();
             return Ok(chats);
         }
+
+
 
         // POST: /api/Chat
         [HttpPost]
@@ -93,13 +112,36 @@ namespace WebAPIChatAI.Controllers
                 CreatedAt = DateTime.UtcNow
             };
 
+
             _context.Chats.Add(newChat);
+            await _context.SaveChangesAsync();
+
+            var userSettings = await _context.Settings.FirstOrDefaultAsync(s => s.UserId == request.UserId);
+
+            var defaultModel = userSettings?.Model ?? "qwen3-vl:2b";
+            var defaultTemp = userSettings?.Temperature ?? 0.7;
+            var defaultMaxTokens = userSettings?.MaxTokens ?? 1024;
+
+            var chatSetting = new SettingsChat_Table
+            {
+                ChatId = newChat.Id,
+                Model = defaultModel,
+                Temperature = defaultTemp,
+                MaxTokens = defaultMaxTokens
+            };
+
+            _context.SettingChats.Add(chatSetting);
             await _context.SaveChangesAsync();
 
             return CreatedAtAction(
                 nameof(GetChats),
                 new { userId = newChat.UserId },
                 new ChatDto(newChat.Id, newChat.Title)
+                {
+                    UserId = newChat.UserId,
+                    Model = chatSetting.Model,
+                    IsIncognito = newChat.IsIncognito
+                }
             );
         }
 
@@ -146,7 +188,58 @@ namespace WebAPIChatAI.Controllers
             return Ok(messages.Select(m => m.ToDto()));
         }
 
-        // POST: /api/Chat/send
+        // GET: api/ChatSettings/{chatId}
+        [HttpGet("getChatSettings/{chatId}")]
+        public async Task<ActionResult<SettingsChat_Table>> GetChatSettings(int chatId)
+        {
+            var entity = await _context.SettingChats
+                .AsNoTracking()
+                .FirstOrDefaultAsync(s => s.ChatId == chatId);
+
+            if (entity == null) return NotFound();
+
+            return new SettingsChat_Table
+            {
+                ChatId = entity.ChatId,
+                Model = entity.Model,
+                Temperature = entity.Temperature,
+                MaxTokens = entity.MaxTokens
+            };
+        }
+
+        // POST: api/ChatSettings/chat/save
+        [HttpPost("chat/saveChatSettings")]
+        public async Task<ActionResult<SettingsChat_Table>> SaveChatSettings(
+            [FromBody] SettingsChat_Table request)
+        {
+            // ищем запись по ChatId
+            var entity = await _context.SettingChats
+                .FirstOrDefaultAsync(s => s.ChatId == request.ChatId);
+
+            if (entity == null)
+            {
+                entity = new SettingsChat_Table
+                {
+                    ChatId = request.ChatId,
+                    Model = request.Model,
+                    Temperature = request.Temperature,
+                    MaxTokens = request.MaxTokens
+                };
+                _context.SettingChats.Add(entity);
+            }
+            else
+            {
+                entity.Model = request.Model;
+                entity.Temperature = request.Temperature;
+                entity.MaxTokens = request.MaxTokens;
+            }
+
+            await _context.SaveChangesAsync();
+
+            return Ok(entity);
+        }
+
+        // POST: /api/Chat/send 
         [HttpPost("send")]
         public async Task<ActionResult<SendMessageResponse>> SendMessage(
             [FromBody] SendMessageRequest request)
@@ -157,6 +250,9 @@ namespace WebAPIChatAI.Controllers
 
             if (chat == null)
                 return NotFound(new { error = "Chat not found" });
+
+            // ⚡ флаг инкогнито
+            bool isIncognito = chat.IsIncognito;
 
             // 2. Настройки пользователя (модель)
             var settings = await _context.Settings
@@ -171,11 +267,21 @@ namespace WebAPIChatAI.Controllers
                 $"[DEBUG] SendMessage: Text='{request.Text}', ImagesCount={images.Count}, Model={modelName}");
 
             // 3. Загружаем прошлую историю чата (без текущего хода)
-            var history = await _context.Messages
-                .Where(m => m.ChatId == request.ChatId && m.Type != "context_reset")
-                .Include(m => m.Images)
-                .OrderBy(m => m.CreatedAt)
-                .ToListAsync();
+            List<Message_Table> history;
+
+            if (isIncognito)
+            {
+                // инкогнито: историю не берём из БД
+                history = new List<Message_Table>();
+            }
+            else
+            {
+                history = await _context.Messages
+                    .Where(m => m.ChatId == request.ChatId && m.Type != "context_reset")
+                    .Include(m => m.Images)
+                    .OrderBy(m => m.CreatedAt)
+                    .ToListAsync();
+            }
 
             // 3.1 Ограничиваем историю по токенам
             var selected = new List<Message_Table>();
@@ -183,7 +289,6 @@ namespace WebAPIChatAI.Controllers
 
             int historyTokensLimit = GetHistoryTokensLimit(modelName);
 
-            // идём с конца списка (от новых к старым)
             for (int i = history.Count - 1; i >= 0; i--)
             {
                 var msg = history[i];
@@ -196,7 +301,6 @@ namespace WebAPIChatAI.Controllers
                 usedTokens += tokens;
             }
 
-            // разворачиваем обратно от старых к новым
             selected.Reverse();
             history = selected;
 
@@ -233,7 +337,6 @@ namespace WebAPIChatAI.Controllers
             // 3.3. Добавляем текущий запрос пользователя
             if (hasImages)
             {
-                // если есть текст — кидаем его отдельным сообщением
                 if (!string.IsNullOrWhiteSpace(request.Text))
                 {
                     ollamaMessages.Add(new
@@ -243,7 +346,6 @@ namespace WebAPIChatAI.Controllers
                     });
                 }
 
-                // каждую картинку — отдельным user-сообщением
                 int index = 1;
                 foreach (var imgBase64 in images)
                 {
@@ -258,7 +360,6 @@ namespace WebAPIChatAI.Controllers
             }
             else
             {
-                // только текст
                 ollamaMessages.Add(new
                 {
                     role = "user",
@@ -266,37 +367,42 @@ namespace WebAPIChatAI.Controllers
                 });
             }
 
-            // 4. Сохраняем сообщение пользователя в БД
-            var userMessage = new Message_Table
+            // 4. Сохраняем сообщение пользователя (только если НЕ инкогнито)
+            Message_Table? userMessage = null;
+
+            if (!isIncognito)
             {
-                ChatId = (int)request.ChatId,
-                Role = 1,
-                Text = request.Text ?? "",
-                Type = hasImages ? "image" : "text",
-                CreatedAt = DateTime.UtcNow
-            };
-
-            _context.Messages.Add(userMessage);
-            await _context.SaveChangesAsync();
-
-            // 4.1. Сохраняем все картинки
-            foreach (var imgBase64 in images)
-            {
-                if (string.IsNullOrWhiteSpace(imgBase64))
-                    continue;
-
-                var bytes = Convert.FromBase64String(imgBase64);
-
-                var imgRow = new Image_Table
+                userMessage = new Message_Table
                 {
-                    MessageId = userMessage.Id,
-                    ImageBlob = bytes
+                    ChatId = (int)request.ChatId,
+                    Role = 1,
+                    Text = request.Text ?? "",
+                    Type = hasImages ? "image" : "text",
+                    CreatedAt = DateTime.UtcNow
                 };
 
-                _context.Images.Add(imgRow);
-            }
+                _context.Messages.Add(userMessage);
+                await _context.SaveChangesAsync();
 
-            await _context.SaveChangesAsync();
+                // 4.1. Сохраняем все картинки
+                foreach (var imgBase64 in images)
+                {
+                    if (string.IsNullOrWhiteSpace(imgBase64))
+                        continue;
+
+                    var bytes = Convert.FromBase64String(imgBase64);
+
+                    var imgRow = new Image_Table
+                    {
+                        MessageId = userMessage.Id,
+                        ImageBlob = bytes
+                    };
+
+                    _context.Images.Add(imgRow);
+                }
+
+                await _context.SaveChangesAsync();
+            }
 
             // 5. Если модель не умеет в картинки — заглушка
             if (hasImages && !ModelCapabilities.SupportsImages(modelName))
@@ -312,21 +418,27 @@ namespace WebAPIChatAI.Controllers
                     CreatedAt = DateTime.UtcNow
                 };
 
-                _context.Messages.Add(aiStub);
-                await _context.SaveChangesAsync();
+                if (!isIncognito)
+                {
+                    _context.Messages.Add(aiStub);
+                    await _context.SaveChangesAsync();
 
-                await _context.Entry(userMessage)
-                    .Collection(m => m.Images)
-                    .LoadAsync();
+                    if (userMessage != null)
+                    {
+                        await _context.Entry(userMessage)
+                            .Collection(m => m.Images)
+                            .LoadAsync();
+                    }
+                }
 
                 return Ok(new SendMessageResponse
                 {
-                    UserMessage = userMessage.ToDto(),
+                    UserMessage = userMessage?.ToDto(),  // в инкогнито может быть null
                     AiMessage = aiStub.ToDto()
                 });
             }
 
-            // 6–7. Пытаемся получить ответ модели, но не даём контроллеру упасть
+            // 6–7. Ответ модели (с защитой от падения)
             Message_Table aiMessage;
 
             try
@@ -354,8 +466,11 @@ namespace WebAPIChatAI.Controllers
                     CreatedAt = DateTime.UtcNow
                 };
 
-                _context.Messages.Add(aiMessage);
-                await _context.SaveChangesAsync();
+                if (!isIncognito)
+                {
+                    _context.Messages.Add(aiMessage);
+                    await _context.SaveChangesAsync();
+                }
             }
             catch (Exception ex)
             {
@@ -371,20 +486,47 @@ namespace WebAPIChatAI.Controllers
                     CreatedAt = DateTime.UtcNow
                 };
 
-                _context.Messages.Add(aiMessage);
-                await _context.SaveChangesAsync();
+                if (!isIncognito)
+                {
+                    _context.Messages.Add(aiMessage);
+                    await _context.SaveChangesAsync();
+                }
             }
 
-            // 8. Подгружаем картинки для userMessage (для корректного DTO)
-            await _context.Entry(userMessage)
-                .Collection(m => m.Images)
-                .LoadAsync();
+            // 8. Подгружаем картинки для userMessage (если есть и не инкогнито)
+            if (!isIncognito && userMessage != null)
+            {
+                await _context.Entry(userMessage)
+                    .Collection(m => m.Images)
+                    .LoadAsync();
+            }
 
             return Ok(new SendMessageResponse
             {
-                UserMessage = userMessage.ToDto(),
+                UserMessage = userMessage?.ToDto(),  // для инкогнито null
                 AiMessage = aiMessage.ToDto()
             });
         }
+
+
+
+        public record RenameChatRequest(string Title);
+
+        [HttpPut("{chatId}/rename")]
+        public async Task<IActionResult> RenameChat(int chatId, [FromBody] RenameChatRequest request)
+        {
+            if (string.IsNullOrWhiteSpace(request.Title))
+                return BadRequest("Title is required");
+
+            var chat = await _context.Chats.FindAsync(chatId);
+            if (chat == null)
+                return NotFound();
+
+            chat.Title = request.Title;
+            await _context.SaveChangesAsync();
+
+            return NoContent();
+        }
+
     }
 }

@@ -20,6 +20,7 @@ namespace WebAPIChatAI.Models
         // таблица для картинок
         public DbSet<Image_Table> Images { get; set; } = null!;
 
+        public DbSet<SettingsChat_Table> SettingChats { get; set; }
 
     }
 

@@ -1,6 +1,7 @@
 ﻿using System.ComponentModel.DataAnnotations;
 using System.ComponentModel.DataAnnotations.Schema;
 
+
 namespace WebAPIChatAI.Tables
 {
     [Table("settings")]
@@ -22,5 +23,8 @@ namespace WebAPIChatAI.Tables
 
         // связь с пользователем (не обязательно, но полезно)
         public virtual User_Table? User { get; set; }
+
+        public double? Temperature { get; set; } 
+        public int? MaxTokens { get; set; }
     }
 }
