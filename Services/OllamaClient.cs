@@ -45,9 +45,9 @@ namespace WebAPIChatAI.Services
             return doc.RootElement.GetProperty("response").GetString() ?? "";
         }
 
-       
 
-        public async Task<string> SendChatAsync(string model, List<object> messages)
+
+        public async Task<string> SendChatAsync(string model, List<object> messages, CancellationToken cancellationToken = default)
         {
             var body = new
             {
@@ -57,20 +57,26 @@ namespace WebAPIChatAI.Services
             };
 
             var json = JsonSerializer.Serialize(body);
+
             using var content = new StringContent(json, Encoding.UTF8, "application/json");
 
-            var response = await _http.PostAsync("api/chat", content);
+            // ← ← ← ВАЖНО: сюда пробрасываем токен
+            using var response = await _http.PostAsync("/api/chat", content, cancellationToken);
+
             response.EnsureSuccessStatusCode();
 
-            var respJson = await response.Content.ReadAsStringAsync();
+            // ← ← ← сюда тоже пробрасываем токен
+            var respJson = await response.Content.ReadAsStringAsync(cancellationToken);
+
             using var doc = JsonDocument.Parse(respJson);
 
-            // { "message": { "content": "..." }, ... }
+            // твой парсинг JSON как был
             return doc.RootElement
                 .GetProperty("message")
                 .GetProperty("content")
                 .GetString() ?? "";
         }
+
 
     }
 }

@@ -16,6 +16,17 @@ namespace WebAPIChatAI.Models
             Title = title;
         }
 
+        public ChatDto() { }
+
+        public ChatDto(int id, int userId, string title, string? model, bool isIncognito)
+        {
+            Id = id;
+            UserId = userId;
+            Title = title;
+            Model = model;
+            IsIncognito = isIncognito;
+        }
+
         public int Id { get; set; }
         public int UserId { get; set; }
         public string Title { get; set; }

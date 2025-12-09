@@ -21,7 +21,7 @@ namespace WebAPIChatAI.Controllers
 
         // --- Внутренние DTO ---
 
-        public record CreateChatRequest(string Title, long UserId);
+        public record CreateChatRequest(string Title, long UserId, bool IsIncognito);
 
         // тело запроса на отправку сообщения
         public record SendMessageRequest(
@@ -109,7 +109,8 @@ namespace WebAPIChatAI.Controllers
             {
                 Title = request.Title,
                 UserId = (int)request.UserId,
-                CreatedAt = DateTime.UtcNow
+                CreatedAt = DateTime.UtcNow,
+                IsIncognito = request.IsIncognito
             };
 
 
@@ -242,270 +243,297 @@ namespace WebAPIChatAI.Controllers
         // POST: /api/Chat/send 
         [HttpPost("send")]
         public async Task<ActionResult<SendMessageResponse>> SendMessage(
-            [FromBody] SendMessageRequest request)
+            [FromBody] SendMessageRequest request,
+             CancellationToken cancellationToken)
         {
-            // 1. Проверяем, что чат существует
-            var chat = await _context.Chats
-                .FirstOrDefaultAsync(c => c.Id == request.ChatId);
-
-            if (chat == null)
-                return NotFound(new { error = "Chat not found" });
-
-            // ⚡ флаг инкогнито
-            bool isIncognito = chat.IsIncognito;
-
-            // 2. Настройки пользователя (модель)
-            var settings = await _context.Settings
-                .FirstOrDefaultAsync(s => s.UserId == request.UserId);
-
-            var modelName = settings?.Model ?? "qwen2.5-vl:7b";
-
-            var images = request.Base64Images ?? new List<string>();
-            var hasImages = images.Any();
-
-            Console.WriteLine(
-                $"[DEBUG] SendMessage: Text='{request.Text}', ImagesCount={images.Count}, Model={modelName}");
-
-            // 3. Загружаем прошлую историю чата (без текущего хода)
-            List<Message_Table> history;
-
-            if (isIncognito)
+            try
             {
-                // инкогнито: историю не берём из БД
-                history = new List<Message_Table>();
-            }
-            else
-            {
-                history = await _context.Messages
-                    .Where(m => m.ChatId == request.ChatId && m.Type != "context_reset")
-                    .Include(m => m.Images)
-                    .OrderBy(m => m.CreatedAt)
-                    .ToListAsync();
-            }
+                // 1. Проверяем, что чат существует
+                var chat = await _context.Chats
+                    .FirstOrDefaultAsync(c => c.Id == request.ChatId);
 
-            // 3.1 Ограничиваем историю по токенам
-            var selected = new List<Message_Table>();
-            int usedTokens = 0;
+                if (chat == null)
+                    return NotFound(new { error = "Chat not found" });
 
-            int historyTokensLimit = GetHistoryTokensLimit(modelName);
+                // ⚡ флаг инкогнито
+                bool isIncognito = chat.IsIncognito;
 
-            for (int i = history.Count - 1; i >= 0; i--)
-            {
-                var msg = history[i];
-                int tokens = EstimateTokens(msg.Text);
+                // 2. Настройки пользователя (модель)
+                var settings = await _context.Settings
+                    .FirstOrDefaultAsync(s => s.UserId == request.UserId);
 
-                if (usedTokens + tokens > historyTokensLimit)
-                    break;
+                var modelName = settings?.Model ?? "qwen2.5-vl:7b";
 
-                selected.Add(msg);
-                usedTokens += tokens;
-            }
+                var images = request.Base64Images ?? new List<string>();
+                var hasImages = images.Any();
 
-            selected.Reverse();
-            history = selected;
+                Console.WriteLine(
+                    $"[DEBUG] SendMessage: Text='{request.Text}', ImagesCount={images.Count}, Model={modelName}");
 
-            var ollamaMessages = new List<object>();
+                // 3. Загружаем прошлую историю чата (без текущего хода)
+                List<Message_Table> history;
 
-            // 3.2. История
-            foreach (var m in history)
-            {
-                var roleStr = m.Role == 1 ? "user" : "assistant";
-
-                if (m.Images != null && m.Images.Count > 0)
+                if (isIncognito)
                 {
-                    var imgsBase64 = m.Images
-                        .Select(img => Convert.ToBase64String(img.ImageBlob))
-                        .ToList();
+                    // инкогнито: историю не берём из БД
+                    history = new List<Message_Table>();
+                }
+                else
+                {
+                    history = await _context.Messages
+                        .Where(m => m.ChatId == request.ChatId && m.Type != "context_reset")
+                        .Include(m => m.Images)
+                        .OrderBy(m => m.CreatedAt)
+                        .ToListAsync(cancellationToken);
+                    //.ToListAsync();
+                }
 
-                    ollamaMessages.Add(new
+                // 3.1 Ограничиваем историю по токенам
+                var selected = new List<Message_Table>();
+                int usedTokens = 0;
+
+                int historyTokensLimit = GetHistoryTokensLimit(modelName);
+
+                for (int i = history.Count - 1; i >= 0; i--)
+                {
+                    var msg = history[i];
+                    int tokens = EstimateTokens(msg.Text);
+
+                    if (usedTokens + tokens > historyTokensLimit)
+                        break;
+
+                    selected.Add(msg);
+                    usedTokens += tokens;
+                }
+
+                selected.Reverse();
+                history = selected;
+
+                var ollamaMessages = new List<object>();
+
+                // 3.2. История
+                foreach (var m in history)
+                {
+                    var roleStr = m.Role == 1 ? "user" : "assistant";
+
+                    if (m.Images != null && m.Images.Count > 0)
                     {
-                        role = roleStr,
-                        content = string.IsNullOrWhiteSpace(m.Text) ? null : m.Text,
-                        images = imgsBase64
-                    });
+                        var imgsBase64 = m.Images
+                            .Select(img => Convert.ToBase64String(img.ImageBlob))
+                            .ToList();
+
+                        ollamaMessages.Add(new
+                        {
+                            role = roleStr,
+                            content = string.IsNullOrWhiteSpace(m.Text) ? null : m.Text,
+                            images = imgsBase64
+                        });
+                    }
+                    else
+                    {
+                        ollamaMessages.Add(new
+                        {
+                            role = roleStr,
+                            content = m.Text
+                        });
+                    }
+                }
+
+                // 3.3. Добавляем текущий запрос пользователя
+                if (hasImages)
+                {
+                    if (!string.IsNullOrWhiteSpace(request.Text))
+                    {
+                        ollamaMessages.Add(new
+                        {
+                            role = "user",
+                            content = request.Text
+                        });
+                    }
+
+                    int index = 1;
+                    foreach (var imgBase64 in images)
+                    {
+                        ollamaMessages.Add(new
+                        {
+                            role = "user",
+                            content = $"Current image #{index}",
+                            images = new List<string> { imgBase64 }
+                        });
+                        index++;
+                    }
                 }
                 else
                 {
                     ollamaMessages.Add(new
                     {
-                        role = roleStr,
-                        content = m.Text
-                    });
-                }
-            }
-
-            // 3.3. Добавляем текущий запрос пользователя
-            if (hasImages)
-            {
-                if (!string.IsNullOrWhiteSpace(request.Text))
-                {
-                    ollamaMessages.Add(new
-                    {
                         role = "user",
-                        content = request.Text
+                        content = request.Text ?? ""
                     });
                 }
 
-                int index = 1;
-                foreach (var imgBase64 in images)
-                {
-                    ollamaMessages.Add(new
-                    {
-                        role = "user",
-                        content = $"Current image #{index}",
-                        images = new List<string> { imgBase64 }
-                    });
-                    index++;
-                }
-            }
-            else
-            {
-                ollamaMessages.Add(new
-                {
-                    role = "user",
-                    content = request.Text ?? ""
-                });
-            }
-
-            // 4. Сохраняем сообщение пользователя (только если НЕ инкогнито)
-            Message_Table? userMessage = null;
-
-            if (!isIncognito)
-            {
-                userMessage = new Message_Table
-                {
-                    ChatId = (int)request.ChatId,
-                    Role = 1,
-                    Text = request.Text ?? "",
-                    Type = hasImages ? "image" : "text",
-                    CreatedAt = DateTime.UtcNow
-                };
-
-                _context.Messages.Add(userMessage);
-                await _context.SaveChangesAsync();
-
-                // 4.1. Сохраняем все картинки
-                foreach (var imgBase64 in images)
-                {
-                    if (string.IsNullOrWhiteSpace(imgBase64))
-                        continue;
-
-                    var bytes = Convert.FromBase64String(imgBase64);
-
-                    var imgRow = new Image_Table
-                    {
-                        MessageId = userMessage.Id,
-                        ImageBlob = bytes
-                    };
-
-                    _context.Images.Add(imgRow);
-                }
-
-                await _context.SaveChangesAsync();
-            }
-
-            // 5. Если модель не умеет в картинки — заглушка
-            if (hasImages && !ModelCapabilities.SupportsImages(modelName))
-            {
-                var aiText = "Эта модель не поддерживает работу с картинками";
-
-                var aiStub = new Message_Table
-                {
-                    ChatId = (int)request.ChatId,
-                    Role = 0,
-                    Text = aiText,
-                    Type = "text",
-                    CreatedAt = DateTime.UtcNow
-                };
+                // 4. Сохраняем сообщение пользователя (только если НЕ инкогнито)
+                Message_Table? userMessage = null;
 
                 if (!isIncognito)
                 {
-                    _context.Messages.Add(aiStub);
-                    await _context.SaveChangesAsync();
-
-                    if (userMessage != null)
+                    userMessage = new Message_Table
                     {
-                        await _context.Entry(userMessage)
-                            .Collection(m => m.Images)
-                            .LoadAsync();
+                        ChatId = (int)request.ChatId,
+                        Role = 1,
+                        Text = request.Text ?? "",
+                        Type = hasImages ? "image" : "text",
+                        CreatedAt = DateTime.UtcNow
+                    };
+
+                    _context.Messages.Add(userMessage);
+                    //await _context.SaveChangesAsync();
+                    await _context.SaveChangesAsync(cancellationToken);
+
+                    // 4.1. Сохраняем все картинки
+                    foreach (var imgBase64 in images)
+                    {
+                        if (string.IsNullOrWhiteSpace(imgBase64))
+                            continue;
+
+                        var bytes = Convert.FromBase64String(imgBase64);
+
+                        var imgRow = new Image_Table
+                        {
+                            MessageId = userMessage.Id,
+                            ImageBlob = bytes
+                        };
+
+                        _context.Images.Add(imgRow);
                     }
+                    await _context.SaveChangesAsync(cancellationToken);
+                    //await _context.SaveChangesAsync();
+                }
+
+                // 5. Если модель не умеет в картинки — заглушка
+                if (hasImages && !ModelCapabilities.SupportsImages(modelName))
+                {
+                    var aiText = "Эта модель не поддерживает работу с картинками";
+
+                    var aiStub = new Message_Table
+                    {
+                        ChatId = (int)request.ChatId,
+                        Role = 0,
+                        Text = aiText,
+                        Type = "text",
+                        CreatedAt = DateTime.UtcNow
+                    };
+
+                    if (!isIncognito)
+                    {
+                        _context.Messages.Add(aiStub);
+                        await _context.SaveChangesAsync(cancellationToken);
+                        //await _context.SaveChangesAsync();
+
+                        if (userMessage != null)
+                        {
+                            await _context.Entry(userMessage)
+                                .Collection(m => m.Images)
+                                .LoadAsync(cancellationToken);
+                            //.LoadAsync();
+                        }
+                    }
+
+                    return Ok(new SendMessageResponse
+                    {
+                        UserMessage = userMessage?.ToDto(),  // в инкогнито может быть null
+                        AiMessage = aiStub.ToDto()
+                    });
+                }
+
+                // 6–7. Ответ модели (с защитой от падения)
+                Message_Table aiMessage;
+
+                try
+                {
+                    var answerText = await _ollama.SendChatAsync(modelName, ollamaMessages, cancellationToken);
+
+                    if (!string.IsNullOrWhiteSpace(answerText))
+                    {
+                        answerText = answerText
+                            .Replace("<im_start|>", "")
+                            .Replace("<im_start>", "")
+                            .Trim();
+                    }
+                    else
+                    {
+                        answerText = "(модель вернула пустой ответ)";
+                    }
+
+                    aiMessage = new Message_Table
+                    {
+                        ChatId = (int)request.ChatId,
+                        Role = 0,
+                        Text = answerText,
+                        Type = "text",
+                        CreatedAt = DateTime.UtcNow
+                    };
+
+                    if (!isIncognito)
+                    {
+                        _context.Messages.Add(aiMessage);
+                        await _context.SaveChangesAsync(cancellationToken);
+                        //await _context.SaveChangesAsync();
+                    }
+                }
+
+                catch (OperationCanceledException)
+                {
+                    // 🛑 Клиент отменил запрос — НЕ сохраняем aiMessage
+                    Console.WriteLine("[INFO] SendMessage canceled by client");
+                    // Можно вернуть спец-код, но клиент всё равно уже отвалился.
+                    return StatusCode(StatusCodes.Status499ClientClosedRequest);
+                }
+
+                catch (Exception ex)
+                {
+                    Console.WriteLine("[ERROR] Ollama SendChatAsync failed:");
+                    Console.WriteLine(ex.ToString());
+
+                    aiMessage = new Message_Table
+                    {
+                        ChatId = (int)request.ChatId,
+                        Role = 0,
+                        Text = "(модель временно недоступна или вернула ошибку)",
+                        Type = "text",
+                        CreatedAt = DateTime.UtcNow
+                    };
+
+                    if (!isIncognito)
+                    {
+                        _context.Messages.Add(aiMessage);
+                        //await _context.SaveChangesAsync();
+                        await _context.SaveChangesAsync(cancellationToken);
+                    }
+                }
+
+                // 8. Подгружаем картинки для userMessage (если есть и не инкогнито)
+                if (!isIncognito && userMessage != null)
+                {
+                    await _context.Entry(userMessage)
+                        .Collection(m => m.Images)
+                        .LoadAsync(cancellationToken);
+                    // .LoadAsync();
                 }
 
                 return Ok(new SendMessageResponse
                 {
-                    UserMessage = userMessage?.ToDto(),  // в инкогнито может быть null
-                    AiMessage = aiStub.ToDto()
+                    UserMessage = userMessage?.ToDto(),  // для инкогнито null
+                    AiMessage = aiMessage.ToDto()
                 });
             }
-
-            // 6–7. Ответ модели (с защитой от падения)
-            Message_Table aiMessage;
-
-            try
+            catch (OperationCanceledException)
             {
-                var answerText = await _ollama.SendChatAsync(modelName, ollamaMessages);
-
-                if (!string.IsNullOrWhiteSpace(answerText))
-                {
-                    answerText = answerText
-                        .Replace("<im_start|>", "")
-                        .Replace("<im_start>", "")
-                        .Trim();
-                }
-                else
-                {
-                    answerText = "(модель вернула пустой ответ)";
-                }
-
-                aiMessage = new Message_Table
-                {
-                    ChatId = (int)request.ChatId,
-                    Role = 0,
-                    Text = answerText,
-                    Type = "text",
-                    CreatedAt = DateTime.UtcNow
-                };
-
-                if (!isIncognito)
-                {
-                    _context.Messages.Add(aiMessage);
-                    await _context.SaveChangesAsync();
-                }
+                // На всякий случай общий catch, если отмена случится раньше
+                Console.WriteLine("[INFO] SendMessage canceled (outer catch)");
+                return StatusCode(StatusCodes.Status499ClientClosedRequest);
             }
-            catch (Exception ex)
-            {
-                Console.WriteLine("[ERROR] Ollama SendChatAsync failed:");
-                Console.WriteLine(ex.ToString());
-
-                aiMessage = new Message_Table
-                {
-                    ChatId = (int)request.ChatId,
-                    Role = 0,
-                    Text = "(модель временно недоступна или вернула ошибку)",
-                    Type = "text",
-                    CreatedAt = DateTime.UtcNow
-                };
-
-                if (!isIncognito)
-                {
-                    _context.Messages.Add(aiMessage);
-                    await _context.SaveChangesAsync();
-                }
-            }
-
-            // 8. Подгружаем картинки для userMessage (если есть и не инкогнито)
-            if (!isIncognito && userMessage != null)
-            {
-                await _context.Entry(userMessage)
-                    .Collection(m => m.Images)
-                    .LoadAsync();
-            }
-
-            return Ok(new SendMessageResponse
-            {
-                UserMessage = userMessage?.ToDto(),  // для инкогнито null
-                AiMessage = aiMessage.ToDto()
-            });
+            
         }
 
 
