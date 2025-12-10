@@ -14,7 +14,7 @@ namespace WebAPIChatAI.Services
         public OllamaClient(HttpClient http)
         {
             _http = http;
-            _http.BaseAddress = new Uri("http://localhost:11434/");
+            _http.BaseAddress = new Uri("http://ollama:11434/");
             //_http.BaseAddress = new Uri("http://178.130.131.73:8080/");
 
             // ВАЖНО: ОТКЛЮЧАЕМ ТАЙМАУТ ПОЛНОСТЬЮ
