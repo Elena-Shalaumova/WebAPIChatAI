@@ -42,7 +42,7 @@ namespace WebAPIChatAI.Controllers
             _ollama = ollama;
             _httpClient = httpClientFactory.CreateClient();
             //_httpClient.BaseAddress = new Uri("http://localhost:11434");
-            _httpClient.BaseAddress = new Uri("http://192.168.3.63:11434");
+            _httpClient.BaseAddress = new Uri("http://ollama:11434");
 
             _config = config;                      // ← теперь всё ок
         }

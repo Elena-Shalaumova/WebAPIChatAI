@@ -43,7 +43,7 @@ builder.Services.AddControllers();
 builder.Services.AddHttpClient<OllamaClient>(client =>
 {
     //client.BaseAddress = new Uri("http://localhost:11434");  // или http://ollama:11434
-    client.BaseAddress = new Uri("http://192.168.3.63:11434");
+    client.BaseAddress = new Uri("http://ollama:11434");
     client.Timeout = Timeout.InfiniteTimeSpan;                // ❗ бесконечное ожидание
 });
 
@@ -53,7 +53,7 @@ builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
 builder.Services.AddHttpClient();
 
-builder.WebHost.UseUrls("http://0.0.0.0:5167");
+builder.WebHost.UseUrls("http://0.0.0.0:8080");
 
 var app = builder.Build();
 
