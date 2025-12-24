@@ -1,4 +1,5 @@
-﻿using Microsoft.AspNetCore.Mvc;
+﻿using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;          // ← добавь это
 using WebAPIChatAI.Models;
@@ -9,6 +10,7 @@ using System.Net.Http.Json;
 using System.Linq;
 using MySqlConnector;
 using System.Net.Sockets;
+using System.Text;
 
 namespace WebAPIChatAI.Controllers
 {
@@ -41,8 +43,8 @@ namespace WebAPIChatAI.Controllers
             _context = context;
             _ollama = ollama;
             _httpClient = httpClientFactory.CreateClient();
-            //_httpClient.BaseAddress = new Uri("http://localhost:11434");
-            _httpClient.BaseAddress = new Uri("http://192.168.3.63:11434");
+            _httpClient.BaseAddress = new Uri("http://10.16.69.133:11434");
+            //_httpClient.BaseAddress = new Uri("http://192.168.3.63:11434");
 
             _config = config;                      // ← теперь всё ок
         }
@@ -107,6 +109,64 @@ namespace WebAPIChatAI.Controllers
             return Ok(response);
         }
 
+        // POST: /api/Ai/chat-stream — стримит частичный ответ Ollama клиенту
+        [HttpPost("chat-stream")]
+        public async Task ChatStream([FromBody] AiRequest request)
+        {
+            var cancellationToken = HttpContext.RequestAborted;
+
+            var chat = await _context.Chats
+                .FirstOrDefaultAsync(c => c.Id == request.ChatId, cancellationToken);
+
+            if (chat == null)
+            {
+                Response.StatusCode = StatusCodes.Status404NotFound;
+                await Response.WriteAsync("data: Chat not found\n\n", cancellationToken);
+                return;
+            }
+
+            var userMessage = new Message_Table
+            {
+                ChatId = request.ChatId,
+                Text = request.Message,
+                Role = 1,
+                CreatedAt = DateTime.UtcNow
+            };
+
+            _context.Messages.Add(userMessage);
+            await _context.SaveChangesAsync(cancellationToken);
+
+            Response.Headers.CacheControl = "no-cache";
+            Response.Headers.Connection = "keep-alive";
+            Response.Headers["X-Accel-Buffering"] = "no";
+            Response.ContentType = "text/event-stream";
+
+            var builder = new StringBuilder();
+
+            await foreach (var chunk in _ollama.StreamGenerateAsync(request.Message, cancellationToken))
+            {
+                builder.Append(chunk);
+
+                var payload = chunk.Replace("\n", "\\n");
+                await Response.WriteAsync($"data: {payload}\n\n", cancellationToken);
+                await Response.Body.FlushAsync(cancellationToken);
+            }
+
+            var aiMessage = new Message_Table
+            {
+                ChatId = request.ChatId,
+                Text = builder.ToString(),
+                Role = 0,
+                CreatedAt = DateTime.UtcNow
+            };
+
+            _context.Messages.Add(aiMessage);
+            await _context.SaveChangesAsync(cancellationToken);
+
+            await Response.WriteAsync("data: [DONE]\n\n", cancellationToken);
+            await Response.Body.FlushAsync(cancellationToken);
+        }
+
         // GET: /api/Ai/ollama-version
         [HttpGet("ollama-version")]
         public async Task<ActionResult<OllamaVersionDto>> GetOllamaVersion()
@@ -148,6 +208,3 @@ namespace WebAPIChatAI.Controllers
         }
     }
 }
-    
-
-

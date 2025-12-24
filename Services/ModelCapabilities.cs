@@ -1,4 +1,5 @@
-﻿using System.Collections.Generic;
+﻿//модели которые могут обрабатывать картинки
+using System.Collections.Generic;
 
 namespace WebAPIChatAI.Services
 {

@@ -28,7 +28,7 @@ namespace WebAPIChatAI.Controllers
             _context = context;
 
             _ollamaHttp = httpClientFactory.CreateClient();
-            _ollamaHttp.BaseAddress = new Uri("http://192.168.3.63:11434"); // где крутится Ollama
+            _ollamaHttp.BaseAddress = new Uri("http://10.16.69.133:11434"); // где крутится Ollama
         }
 
         // =========================
@@ -95,6 +95,8 @@ namespace WebAPIChatAI.Controllers
                 model = _currentModelName
             });
         }
+
+
 
 
         // =========================
@@ -304,9 +306,69 @@ namespace WebAPIChatAI.Controllers
                 model = _currentModelName
             });
         }
+        // =========================
+        //   EXPORT ALL DATA (JSON)
+        // =========================
+        [HttpGet("export/user/{userId}")]
+        public async Task<IActionResult> ExportUserData(int userId)
+        {
+            var chats = await _context.Chats
+                .Where(c => c.UserId == userId)
+                .Select(c => new ExportChatDto
+                {
+                    ChatId = c.Id,
+                    Title = c.Title,
+                    CreatedAt = c.CreatedAt,
 
+                    Messages = c.Messages
+                        .OrderBy(m => m.CreatedAt)
+                        .Select(m => new ExportMessageDto
+                        {
+                            MessageId = m.Id,
+                            ChatId = m.ChatId,
+                            Role = m.Role,
+                            Content = m.Text,
+                            CreatedAt = m.CreatedAt
+                        })
+                        .ToList()
+                })
+                .ToListAsync();
+
+            return Ok(chats);
+        }
+
+    }  // <--- КОНЕЦ КЛАССА WebAPIChatAI
+
+
+    // =========================
+    //      EXPORT DTOs
+    // =========================
+    public class ExportMessageDto
+    {
+        public long MessageId { get; set; }
+        public long ChatId { get; set; }
+        //public string Role { get; set; }
+        public int Role { get; set; }
+        public string Content { get; set; }
+        public DateTime CreatedAt { get; set; }
     }
+
+    public class ExportChatDto
+    {
+        public long ChatId { get; set; }
+        public string Title { get; set; }
+        public DateTime CreatedAt { get; set; }
+        public List<ExportMessageDto> Messages { get; set; } = new();
+    }
+
 }
+
+
+
+
+
+
+ 
 
 
 

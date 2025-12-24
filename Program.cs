@@ -42,10 +42,12 @@ builder.Services.AddControllers();
 
 builder.Services.AddHttpClient<OllamaClient>(client =>
 {
-    //client.BaseAddress = new Uri("http://localhost:11434");  // или http://ollama:11434
-    client.BaseAddress = new Uri("http://192.168.3.63:11434");
-    client.Timeout = Timeout.InfiniteTimeSpan;                // ❗ бесконечное ожидание
+client.BaseAddress = new Uri("http://10.16.69.133:11434");  // или http://ollama:11434
+//client.BaseAddress = new Uri("http://192.168.3.63:11434");
+client.Timeout = Timeout.InfiniteTimeSpan;                // ❗ бесконечное ожидание
 });
+
+
 
 
 // Learn more about configuring Swagger/OpenAPI at https://aka.ms/aspnetcore/swashbuckle

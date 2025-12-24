@@ -1,0 +1,44 @@
+services:
+  db:
+    image: mysql:8.0
+    container_name: my_mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: rootpassword
+      MYSQL_DATABASE: alabugaaidb
+      MYSQL_USER: clientKotlin
+      MYSQL_PASSWORD: 12345678
+    ports:
+      - "3306:3306"
+    volumes:
+      - db_data:/var/lib/mysql
+
+  phpmyadmin:
+    image: phpmyadmin/phpmyadmin
+    container_name: my_phpmyadmin
+    depends_on:
+      - db
+    environment:
+      PMA_HOST: db
+      PMA_USER: root
+      PMA_PASSWORD: rootpassword
+    ports:
+      - "8081:80"
+
+  webapi:
+    # Собираем из Dockerfile в этом же каталоге
+    build: .
+    container_name: webapichatai
+    depends_on:
+      - db
+    environment:
+      ASPNETCORE_ENVIRONMENT: "Production"
+      # Строка подключения к MySQL внутри docker-сети
+      # (обрати внимание: Server = db, а не 127.0.0.1)
+      ConnectionStrings__ChatAIDBConnection: "Server=db;Port=3306;Database=alabugaidb;Uid=clientKotlin;Pwd=12345678;AllowPublicKeyRetrieval=True;Charset=utf8mb4;"
+    ports:
+      # снаружи 5167 -> внутри контейнера 8080 (мы так прописали в Dockerfile: ASPNETCORE_URLS=http://+:8080)
+      - "5167:8080"
+    restart: unless-stopped
+
+volumes:
+  db_data:
